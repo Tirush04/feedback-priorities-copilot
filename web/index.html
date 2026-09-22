@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Feedback-to-Priorities Copilot</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>Feedback-to-Priorities Copilot</h1>
+    <p class="subtitle">Upload a batch of customer feedback. Get themes, evidence, and a decision brief.</p>
+  </header>
+
+  <main>
+    <section id="upload-section" class="card">
+      <h2>1. Upload feedback CSV</h2>
+      <p class="hint">Needs a column named <code>text</code>, <code>comment</code>, <code>feedback</code>, <code>body</code>, <code>message</code>, or <code>review</code>.</p>
+      <form id="upload-form">
+        <input type="file" id="csv-input" accept=".csv" required />
+        <button type="submit">Analyze</button>
+      </form>
+      <p id="upload-status" class="status" role="status"></p>
+    </section>
+
+    <section id="results-section" class="card hidden">
+      <h2>2. Themes</h2>
+      <p class="hint">Rename a theme to match how your team talks about it — opportunities below update automatically.</p>
+      <ul id="themes-list"></ul>
+
+      <h2>3. Suggested opportunities</h2>
+      <p class="hint">Every quote is copied verbatim from your CSV. Nothing here is paraphrased.</p>
+      <div id="opportunities-list"></div>
+
+      <h2>4. Decision brief</h2>
+      <div class="brief-controls">
+        <button id="generate-brief">Generate brief</button>
+        <a id="download-brief" class="hidden" download="decision-brief.md">Download .md</a>
+      </div>
+      <pre id="brief-output" class="hidden"></pre>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
