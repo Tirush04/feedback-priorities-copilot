@@ -49,6 +49,25 @@ inference on CSV content that was never meant to be trusted.
 ## Upload limits
 
 2 MB per file, 5000 rows, 2000 characters per feedback item
-(`app/ingest.py`, `app/main.py`). The whole file is read into memory before
-the size check runs — fine at these limits, would need to become a
-streaming check before raising them.
+(`app/ingest.py`, `app/main.py`). The primary size guard is
+`MaxUploadSizeMiddleware` in `app/main.py`, which rejects a request by its
+declared `Content-Length` header before Starlette parses the multipart
+body at all. A client with no (or a lying) `Content-Length` falls through
+to a second, in-handler check after the body is read -- so the worst case
+is still bounded by what gets buffered, just not as tightly as the
+primary path. Raising these limits significantly would need a real
+streaming parser instead of buffering the whole body either way.
+
+
+## Frontend has no automated test coverage
+
+`web/app.js` is checked by live browser QA (upload -> rename -> edge cases
+-> prioritize -> export), not by an automated suite -- adding a JS test
+runner for one ~200-line vanilla-JS file felt disproportionate for this
+MVP's scope. Two real bugs were caught this way before shipping and are
+covered on the *backend* contract instead, where the behavior they depend
+on is testable: a stale/desynced theme-rename UI (fixed by re-rendering
+after every PATCH response, success or failure) and an unreadable
+"[object Object]" error message for Pydantic-shaped 422 responses (fixed
+in `errorMessageFrom()`). If this app grows a heavier frontend, that's the
+point to add a real JS test runner.

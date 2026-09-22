@@ -16,20 +16,56 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.clustering import cluster_feedback
 from app.export import render_brief_json, render_brief_markdown
 from app.ingest import IngestError, parse_feedback_csv
-from app.models import DecisionBrief, Priority, VALID_PRIORITIES
+from app.models import DecisionBrief, Priority
 from app.priorities import InvalidPriority, OpportunityNotFound, set_priority
+from app.serialize import opportunity_to_dict
 from app.store import SessionNotFound, ThemeNotFound, store
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
-MAX_UPLOAD_BYTES = 2 * 1024 * 1024  # 2 MB — an MVP ceiling, not a streaming guard.
+MAX_UPLOAD_BYTES = 2 * 1024 * 1024  # 2 MB
 ALLOWED_EXTENSIONS = (".csv",)
+UPLOAD_PATH = "/api/sessions"
+
+
+class MaxUploadSizeMiddleware(BaseHTTPMiddleware):
+    """Reject an oversized upload via its declared Content-Length, before
+    Starlette's multipart parser buffers the whole body into memory/disk.
+
+    This is the real fix for the naive "check len(raw) after file.read()"
+    approach: by the time a route handler sees an UploadFile, Starlette has
+    already fully parsed the multipart body to produce it. Checking
+    Content-Length here runs *before* that parsing starts. It's not
+    bulletproof (a client can lie about Content-Length, or use chunked
+    transfer-encoding with none at all) — the in-handler size check in
+    create_session() below stays as a second layer for those cases.
+    """
+
+    async def dispatch(self, request: Request, call_next):
+        if request.url.path == UPLOAD_PATH and request.method == "POST":
+            content_length = request.headers.get("content-length")
+            if content_length is not None:
+                try:
+                    declared_size = int(content_length)
+                except ValueError:
+                    declared_size = None
+                if declared_size is not None and declared_size > MAX_UPLOAD_BYTES:
+                    return JSONResponse(
+                        status_code=413,
+                        content={
+                            "detail": f"File is larger than the {MAX_UPLOAD_BYTES // (1024 * 1024)} MB limit."
+                        },
+                    )
+        return await call_next(request)
+
 
 app = FastAPI(title="Feedback-to-Priorities Copilot", version="0.1.0")
+app.add_middleware(MaxUploadSizeMiddleware)
 
 if WEB_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
@@ -42,6 +78,14 @@ if WEB_DIR.exists():
 
 class ThemeRenameRequest(BaseModel):
     label: str = Field(min_length=1, max_length=120)
+
+    @field_validator("label")
+    @classmethod
+    def not_blank(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("label cannot be blank or whitespace-only")
+        return cleaned
 
 
 class PriorityRequest(BaseModel):
@@ -64,30 +108,13 @@ def _theme_dict(theme) -> dict:
     }
 
 
-def _evidence_dict(evidence) -> dict:
-    return {"item_id": evidence.item_id, "quote": evidence.quote, "source_row": evidence.source_row}
-
-
-def _opportunity_dict(opportunity) -> dict:
-    return {
-        "id": opportunity.id,
-        "theme_id": opportunity.theme_id,
-        "title": opportunity.title,
-        "priority": opportunity.priority,
-        "notes": opportunity.notes,
-        "count": opportunity.count,
-        "supporting_evidence": [_evidence_dict(e) for e in opportunity.supporting_evidence],
-        "conflicting_evidence": [_evidence_dict(e) for e in opportunity.conflicting_evidence],
-    }
-
-
 def _session_dict(session) -> dict:
     return {
         "session_id": session.id,
         "created_at": session.created_at,
         "total_feedback_items": len(session.items),
         "themes": [_theme_dict(t) for t in session.themes],
-        "opportunities": [_opportunity_dict(o) for o in session.opportunities],
+        "opportunities": [opportunity_to_dict(o) for o in session.opportunities],
     }
 
 
@@ -110,6 +137,8 @@ async def create_session(file: UploadFile) -> JSONResponse:
     if not filename.endswith(ALLOWED_EXTENSIONS):
         raise HTTPException(status_code=400, detail="Please upload a .csv file.")
 
+    # Second layer, for requests with no (or a lying) Content-Length header —
+    # MaxUploadSizeMiddleware above is the primary guard for well-behaved clients.
     raw = await file.read()
     if len(raw) > MAX_UPLOAD_BYTES:
         raise HTTPException(
@@ -157,7 +186,7 @@ def set_opportunity_priority(session_id: str, opportunity_id: str, body: Priorit
         raise HTTPException(status_code=404, detail="Session not found.") from exc
     except OpportunityNotFound as exc:
         raise HTTPException(status_code=404, detail="Opportunity not found.") from exc
-    except InvalidPriority as exc:  # pragma: no cover — Pydantic's Literal check on
+    except InvalidPriority as exc:  # pragma: no cover -- Pydantic's Literal check on
         # `PriorityRequest.priority` already rejects anything outside VALID_PRIORITIES
         # before this code runs; kept as defense-in-depth if that ever changes.
         raise HTTPException(status_code=422, detail=str(exc)) from exc

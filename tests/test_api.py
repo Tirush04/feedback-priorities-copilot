@@ -93,6 +93,34 @@ def test_rejects_oversize_upload(client, monkeypatch):
     assert resp.status_code == 413
 
 
+def test_content_length_over_limit_rejected_before_parsing(client, monkeypatch):
+    """MaxUploadSizeMiddleware must reject based on the declared
+    Content-Length header alone -- before the small actual body below is
+    ever parsed as CSV. If this test only proved the eventual 413 without
+    checking a body far under the declared length, a regression to the
+    naive "check after file.read()" approach could slip back in unnoticed.
+    """
+    monkeypatch.setattr("app.main.MAX_UPLOAD_BYTES", 10)
+    resp = client.post(
+        "/api/sessions",
+        headers={"content-length": "99999999"},
+        content=b"tiny",
+    )
+    assert resp.status_code == 413
+
+
+def test_malformed_content_length_header_does_not_crash(client, valid_csv_bytes):
+    """A non-numeric Content-Length must fall through to the normal
+    request handling instead of raising inside the middleware.
+    """
+    resp = client.post(
+        "/api/sessions",
+        headers={"content-length": "not-a-number"},
+        files={"file": ("feedback.csv", io.BytesIO(valid_csv_bytes), "text/csv")},
+    )
+    assert resp.status_code == 201
+
+
 def test_rejects_csv_with_no_text_column(client, missing_text_column_csv_bytes):
     resp = _upload(client, missing_text_column_csv_bytes)
     assert resp.status_code == 400
@@ -123,6 +151,41 @@ def test_priority_on_unknown_session_returns_404(client):
 def test_brief_on_unknown_session_returns_404(client):
     resp = client.get("/api/sessions/does-not-exist/brief")
     assert resp.status_code == 404
+
+
+def test_rename_theme_with_whitespace_only_label_is_rejected(client, valid_csv_bytes):
+    """A blank-looking rename must be a visible 422, not a silent no-op --
+    see app/main.py's ThemeRenameRequest validator and the frontend fix in
+    web/app.js (renameTheme now re-renders on both success and failure).
+    """
+    body = _upload(client, valid_csv_bytes).json()
+    theme_id = body["themes"][0]["id"]
+    original_label = body["themes"][0]["label"]
+
+    resp = client.patch(
+        f"/api/sessions/{body['session_id']}/themes/{theme_id}",
+        json={"label": "   "},
+    )
+    assert resp.status_code == 422
+
+    # And the label must be genuinely unchanged server-side, not just
+    # rejected at the HTTP layer while quietly mutating state anyway.
+    refetch = client.get(f"/api/sessions/{body['session_id']}").json()
+    unchanged_theme = next(t for t in refetch["themes"] if t["id"] == theme_id)
+    assert unchanged_theme["label"] == original_label
+
+
+def test_rename_theme_trims_surrounding_whitespace(client, valid_csv_bytes):
+    body = _upload(client, valid_csv_bytes).json()
+    theme_id = body["themes"][0]["id"]
+
+    resp = client.patch(
+        f"/api/sessions/{body['session_id']}/themes/{theme_id}",
+        json={"label": "  Padded Label  "},
+    )
+    assert resp.status_code == 200
+    renamed_theme = next(t for t in resp.json()["themes"] if t["id"] == theme_id)
+    assert renamed_theme["label"] == "Padded Label"
 
 
 def test_rename_unknown_theme_returns_404(client, valid_csv_bytes):

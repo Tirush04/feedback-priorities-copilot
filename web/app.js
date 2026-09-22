@@ -1,4 +1,4 @@
-// Vanilla JS — no build step, no framework. Every value that came from the
+// Vanilla JS -- no build step, no framework. Every value that came from the
 // uploaded CSV (theme labels, keywords, quotes, notes) is written to the DOM
 // with textContent, never innerHTML, so a hostile CSV cell can't inject markup.
 "use strict";
@@ -21,17 +21,29 @@ function setStatus(message, kind) {
   uploadStatus.className = "status" + (kind ? " " + kind : "");
 }
 
+function errorMessageFrom(body, fallback) {
+  // Our own HTTPException(...) calls send {"detail": "a plain string"}.
+  // FastAPI's built-in 422s (e.g. from a Pydantic field_validator) send
+  // {"detail": [{"msg": "...", "loc": [...], ...}, ...]} instead -- without
+  // this branch that array stringifies to the useless "[object Object]".
+  if (!body || body.detail === undefined || body.detail === null) return fallback;
+  if (typeof body.detail === "string") return body.detail;
+  if (Array.isArray(body.detail) && body.detail.length && body.detail[0].msg) {
+    return body.detail[0].msg;
+  }
+  return fallback;
+}
+
 async function apiFetch(path, options) {
   const response = await fetch(API_BASE + path, options);
   let body = null;
   try {
     body = await response.json();
   } catch (err) {
-    // No JSON body (or a network-level failure) — fall through to statusText.
+    // No JSON body (or a network-level failure) -- fall through to statusText.
   }
   if (!response.ok) {
-    const detail = body && body.detail ? body.detail : response.statusText;
-    throw new Error(detail);
+    throw new Error(errorMessageFrom(body, response.statusText));
   }
   return body;
 }
@@ -42,7 +54,7 @@ uploadForm.addEventListener("submit", async (event) => {
   if (!file) return;
 
   const submitButton = uploadForm.querySelector("button");
-  setStatus("Analyzing…", "");
+  setStatus("Analyzing...", "");
   submitButton.disabled = true;
   try {
     const formData = new FormData();
@@ -98,9 +110,17 @@ async function renameTheme(themeId, label) {
       body: JSON.stringify({ label }),
     });
     currentSession = updated;
+    // Re-render both: the server may have normalized the label (trimmed
+    // whitespace), and a rejected/blank rename must not leave a stale or
+    // out-of-sync value sitting in the input -- see the catch branch below.
+    renderThemes(updated);
     renderOpportunities(updated);
   } catch (err) {
     setStatus(err.message, "error");
+    // The PATCH failed (e.g. a blank label was rejected server-side); reset
+    // the input back to the last known-good state instead of leaving the
+    // user's rejected edit visible as if it had been saved.
+    if (currentSession) renderThemes(currentSession);
   }
 }
 
@@ -167,7 +187,7 @@ function buildOpportunityCard(opportunity) {
   }
 
   const notes = document.createElement("textarea");
-  notes.placeholder = "Notes for the team…";
+  notes.placeholder = "Notes for the team...";
   notes.value = opportunity.notes || "";
 
   const savePriority = () => setPriority(opportunity.id, select.value, notes.value);

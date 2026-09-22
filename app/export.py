@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from app.models import DecisionBrief, Opportunity
+from app.models import DecisionBrief
+from app.serialize import opportunity_to_dict
 
 
 def _evidence_lines(label: str, evidence) -> list[str]:
@@ -40,27 +41,9 @@ def render_brief_markdown(brief: DecisionBrief) -> str:
 
 
 def render_brief_json(brief: DecisionBrief) -> dict:
-    def evidence_dict(evidence_list):
-        return [
-            {"item_id": e.item_id, "quote": e.quote, "source_row": e.source_row}
-            for e in evidence_list
-        ]
-
     return {
         "session_id": brief.session_id,
         "generated_at": brief.generated_at,
         "total_feedback_items": brief.total_feedback_items,
-        "opportunities": [
-            {
-                "id": o.id,
-                "theme_id": o.theme_id,
-                "title": o.title,
-                "priority": o.priority,
-                "notes": o.notes,
-                "count": o.count,
-                "supporting_evidence": evidence_dict(o.supporting_evidence),
-                "conflicting_evidence": evidence_dict(o.conflicting_evidence),
-            }
-            for o in brief.opportunities
-        ],
+        "opportunities": [opportunity_to_dict(o) for o in brief.opportunities],
     }

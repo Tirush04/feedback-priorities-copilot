@@ -35,8 +35,9 @@ def derive_opportunities(
         members = [items_by_id[item_id] for item_id in theme.item_ids]
         negative = [m for m in members if sentiment.classify(m.text) == "negative"]
         positive = [m for m in members if sentiment.classify(m.text) == "positive"]
-        # More complaints raise the score; a lot of satisfied users pulls it down,
-        # but never below zero purely from praise — count still matters.
+        # More complaints raise the score; praise pulls it down and can push
+        # it negative on its own (an all-praise theme should rank below a
+        # mixed or neutral one, not just lower among problems).
         opportunity_score = len(negative) - 0.5 * len(positive)
         scored.append((opportunity_score, theme, negative, positive))
 
